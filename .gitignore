@@ -1,0 +1,32 @@
+# Compiled object files
+*.o
+*.lo
+*.la
+*.al
+*.out
+*.so
+
+# Executables
+a.out
+output/
+analyzer
+
+# Debug files
+*.dSYM/
+*.stackdump
+core
+vgcore.*
+
+# Temporary files
+*.swp
+*.swo
+*~
+.#*
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+EOF
