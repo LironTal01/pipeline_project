@@ -13,6 +13,7 @@ typedef struct {
 	int count;                     /* Current number of items */
 	int head;                      /* Index of first item */
 	int tail;                      /* Index of next insertion point */
+	int finished;                  /* Flag indicating if processing is finished */
 	monitor_t not_full_monitor;    /* Monitor for "not full" state */
 	monitor_t not_empty_monitor;   /* Monitor for "not empty" state */
 	monitor_t finished_monitor;    /* Monitor for finished signal */
