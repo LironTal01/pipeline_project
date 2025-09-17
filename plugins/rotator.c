@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 
+
 /**
  * Rotator plugin transformation function
  * Rotates each character by 13 positions (ROT13)
@@ -16,22 +17,23 @@ const char* plugin_transform(const char* input) {
         return NULL;
     }
     
+    // Don't process <END> - just return NULL to stop the pipeline
+    if (strcmp(input, "<END>") == 0) {
+        return NULL;
+    }
+    
     size_t len = strlen(input);
     char* result = (char*)malloc(len + 1);
     if (!result) {
         return NULL;
     }
     
-    for (size_t i = 0; i < len; i++) {
-        char c = input[i];
-        if (isalpha(c)) {
-            if (islower(c)) {
-                result[i] = 'a' + ((c - 'a' + 13) % 26);
-            } else {
-                result[i] = 'A' + ((c - 'A' + 13) % 26);
-            }
-        } else {
-            result[i] = c;
+    // Rotate right: move every character one position to the right
+    // The last character wraps around to the front
+    if (len > 0) {
+        result[0] = input[len - 1]; // Last character goes to first position
+        for (size_t i = 1; i < len; i++) {
+            result[i] = input[i - 1]; // Each character moves one position right
         }
     }
     result[len] = '\0';
@@ -48,3 +50,6 @@ __attribute__((visibility("default")))
 const char* plugin_init(int queue_size) {
     return common_plugin_init(plugin_transform, "rotator", queue_size);
 }
+
+// All other plugin functions are implemented in plugin_common.c
+// and will be used automatically

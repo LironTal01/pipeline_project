@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 
+
 /**
  * Flipper plugin transformation function
  * Flips the case of each character
@@ -16,21 +17,20 @@ const char* plugin_transform(const char* input) {
         return NULL;
     }
     
+    // Don't process <END> - just return NULL to stop the pipeline
+    if (strcmp(input, "<END>") == 0) {
+        return NULL;
+    }
+    
     size_t len = strlen(input);
     char* result = (char*)malloc(len + 1);
     if (!result) {
         return NULL;
     }
     
+    // Reverse the order of characters in the string
     for (size_t i = 0; i < len; i++) {
-        char c = input[i];
-        if (islower(c)) {
-            result[i] = toupper(c);
-        } else if (isupper(c)) {
-            result[i] = tolower(c);
-        } else {
-            result[i] = c;
-        }
+        result[i] = input[len - 1 - i];
     }
     result[len] = '\0';
     
@@ -46,3 +46,6 @@ __attribute__((visibility("default")))
 const char* plugin_init(int queue_size) {
     return common_plugin_init(plugin_transform, "flipper", queue_size);
 }
+
+// All other plugin functions are implemented in plugin_common.c
+// and will be used automatically

@@ -42,7 +42,7 @@ int load_plugin(const char* plugin_name) {
     // Open the shared library
     void* handle = dlopen(lib_path, RTLD_LAZY);
     if (!handle) {
-        fprintf(stderr, "Error loading plugin %s: %s\n", plugin_name, dlerror());
+        fprintf(stderr, "[ERROR][main] dlopen('%s') failed: %s\n", lib_path, dlerror());
         return -1;
     }
     
@@ -68,7 +68,7 @@ int load_plugin(const char* plugin_name) {
     // Check if all required functions are found
     if (!plugin->init || !plugin->fini || !plugin->place_work || 
         !plugin->attach || !plugin->wait_finished || !plugin->get_name) {
-        fprintf(stderr, "Error: Plugin %s is missing required functions\n", plugin_name);
+        fprintf(stderr, "[ERROR][main] dlsym() failed for plugin '%s': missing symbol\n", plugin_name);
         dlclose(handle);
         return -1;
     }
@@ -164,11 +164,22 @@ void wait_for_completion(void) {
  * Print usage information
  */
 void print_usage(const char* program_name) {
-    printf("Usage: %s <queue_size> <plugin1> [plugin2] ...\n", program_name);
-    printf("  queue_size: Maximum number of items in each plugin's queue\n");
-    printf("  plugin1, plugin2, ...: Names of plugins to load (without .so extension)\n");
-    printf("\nAvailable plugins:\n");
-    printf("  logger, uppercaser, rotator, flipper, expander, typewriter\n");
+    (void)program_name; // Suppress unused parameter warning
+    printf("Usage: ./analyzer <queue_size> <plugin1> <plugin2> ... <pluginN>\n\n");
+    printf("Arguments:\n");
+    printf("queue_size Maximum number of items in each plugin's queue\n");
+    printf("plugin1..N Names of plugins to load (without .so extension)\n\n");
+    printf("Available plugins:\n");
+    printf("logger - Logs all strings that pass through\n");
+    printf("typewriter - Simulates typewriter effect with delays\n");
+    printf("uppercaser - Converts strings to uppercase\n");
+    printf("rotator - Move every character to the right. Last character moves to the beginning.\n");
+    printf("flipper - Reverses the order of characters\n");
+    printf("expander - Expands each character with spaces\n\n");
+    printf("Example:\n");
+    printf("./analyzer 20 uppercaser rotator logger\n");
+    printf("echo 'hello' | ./analyzer 20 uppercaser rotator logger\n");
+    printf("echo '<END>' | ./analyzer 20 uppercaser rotator logger\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -223,5 +234,6 @@ int main(int argc, char* argv[]) {
     // Finalize plugins
     fini_plugins();
     
+    printf("Pipeline shutdown complete.\n");
     return 0;
 }

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 
+
 /**
  * Uppercaser plugin transformation function
  * Converts input string to uppercase
@@ -13,6 +14,11 @@
  */
 const char* plugin_transform(const char* input) {
     if (!input) {
+        return NULL;
+    }
+    
+    // Don't process <END> - just return NULL to stop the pipeline
+    if (strcmp(input, "<END>") == 0) {
         return NULL;
     }
     
@@ -39,3 +45,6 @@ __attribute__((visibility("default")))
 const char* plugin_init(int queue_size) {
     return common_plugin_init(plugin_transform, "uppercaser", queue_size);
 }
+
+// All other plugin functions are implemented in plugin_common.c
+// and will be used automatically

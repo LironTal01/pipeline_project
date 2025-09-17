@@ -16,27 +16,25 @@ const char* plugin_transform(const char* input) {
         return NULL;
     }
     
+    // Don't process <END> - just return NULL to stop the pipeline
+    if (strcmp(input, "<END>") == 0) {
+        return NULL;
+    }
+    
     size_t len = strlen(input);
-    // Each character becomes 3 characters (original + 2 expanded)
-    char* result = (char*)malloc(len * 3 + 1);
+    // Insert a single white space between each character
+    // Result length: original + (len-1) spaces + null terminator
+    char* result = (char*)malloc(len * 2);
     if (!result) {
         return NULL;
     }
     
     size_t pos = 0;
     for (size_t i = 0; i < len; i++) {
-        char c = input[i];
-        result[pos++] = c;
-        
-        if (isalpha(c)) {
-            // Add two more characters for letters
-            result[pos++] = c;
-            result[pos++] = c;
-        } else if (isdigit(c)) {
-            // Add one more character for digits
-            result[pos++] = c;
+        if (i > 0) {
+            result[pos++] = ' '; // Add space before each character (except first)
         }
-        // For other characters, just keep the original
+        result[pos++] = input[i];
     }
     result[pos] = '\0';
     
@@ -52,3 +50,6 @@ __attribute__((visibility("default")))
 const char* plugin_init(int queue_size) {
     return common_plugin_init(plugin_transform, "expander", queue_size);
 }
+
+// All other plugin functions are implemented in plugin_common.c
+// and will be used automatically

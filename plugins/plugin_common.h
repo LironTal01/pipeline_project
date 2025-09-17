@@ -16,6 +16,7 @@ typedef struct {
 	const char* (*process_function)(const char*); // Plugin-specific processing function
 	int initialized; // Initialization flag
 	int finished; // Finished processing flag
+	int joined; // Thread join flag to prevent double join
 } plugin_context_t;
 
 /**
@@ -41,6 +42,13 @@ void log_error(plugin_context_t* context, const char* message);
 void log_info(plugin_context_t* context, const char* message);
 
 /**
+ * Get the plugin's name
+ * @return The plugin's name (should not be modified or freed)
+ */
+__attribute__((visibility("default")))
+const char* plugin_get_name(void);
+
+/**
  * Initialize the common plugin infrastructure with the specified queue size
  * @param process_function Plugin-specific processing function
  * @param name Plugin name
@@ -50,8 +58,7 @@ void log_info(plugin_context_t* context, const char* message);
 const char* common_plugin_init(const char* (*process_function)(const char*), const char* name, int queue_size);
 
 /**
- * Initialize the plugin with the specified queue size - calls
-common_plugin_init
+ * Initialize the plugin with the specified queue size
  * This function should be implemented by each plugin
  * @param queue_size Maximum number of items that can be queued
  * @return NULL on success, error message on failure
@@ -59,8 +66,7 @@ common_plugin_init
 __attribute__((visibility("default")))
 const char* plugin_init(int queue_size);
 /**
- * Finalize the plugin - drain queue and terminate thread gracefully (i.e.
-pthread_join)
+ * Finalize the plugin - drain queue and terminate thread gracefully
  * @return NULL on success, error message on failure
  */
 __attribute__((visibility("default")))
@@ -84,7 +90,6 @@ void plugin_attach(const char* (*next_place_work)(const char*));
  * Wait until the plugin has finished processing all work and is ready to
 shutdown
  * This is a blocking function used for graceful shutdown coordination
-7.7.2025
  * @return NULL on success, error message on failure
  */
 __attribute__((visibility("default")))

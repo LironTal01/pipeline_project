@@ -24,12 +24,11 @@ void* plugin_consumer_thread(void* arg) {
     while ((item = consumer_producer_get(context->queue)) != NULL) {
         // Check if this is the end marker
         if (strcmp(item, "<END>") == 0) {
-            // This is the end marker - pass it to next plugin or print it, then break
+            // This is the end marker - pass it to next plugin or just finish (don't print <END>)
             if (context->next_place_work) {
                 context->next_place_work(item);
-            } else {
-                printf("[%s] %s\n", context->name, item);
             }
+            // Don't print <END> - just finish
             free(item);
             // Signal that this plugin is finished
             context->finished = 1;
@@ -45,8 +44,8 @@ void* plugin_consumer_thread(void* arg) {
             if (context->next_place_work && result) {
                 context->next_place_work(result);
             } else if (result) {
-                // Last plugin in chain - print result
-                printf("[%s] %s\n", context->name, result);
+                // Last plugin in chain - print result without prefix
+                printf("%s\n", result);
                 free((void*)result);
             }
             
@@ -57,7 +56,8 @@ void* plugin_consumer_thread(void* arg) {
             if (context->next_place_work) {
                 context->next_place_work(item);
             } else {
-                printf("[%s] %s\n", context->name, item);
+                // Last plugin in chain - print without prefix
+                printf("%s\n", item);
                 free(item);
             }
         }
@@ -76,9 +76,8 @@ void* plugin_consumer_thread(void* arg) {
  * @param message Error message
  */
 void log_error(plugin_context_t* context, const char* message) {
-    if (context && message) {
-        fprintf(stderr, "[ERROR][%s] - %s\n", context->name, message);
-    }
+    const char* name = (context && context->name) ? context->name : "plugin";
+    fprintf(stderr, "[ERROR][%s] %s\n", name, message);
 }
 
 /**
@@ -87,9 +86,7 @@ void log_error(plugin_context_t* context, const char* message) {
  * @param message Info message
  */
 void log_info(plugin_context_t* context, const char* message) {
-    if (context && message) {
-        printf("[INFO][%s] - %s\n", context->name, message);
-    }
+    (void)context; (void)message;  // quiet by default to not pollute STDOUT
 }
 
 /**
@@ -112,36 +109,32 @@ const char* plugin_get_name(void) {
  * @return NULL on success, error message on failure
  */
 const char* common_plugin_init(const char* (*process_function)(const char*), const char* name, int queue_size) {
-    if (!process_function) {
-        return "Process function is NULL";
+    if (!process_function || !name || queue_size <= 0) {
+        return "common_plugin_init: bad arguments";
     }
     
-    if (!name) {
-        return "Plugin name is NULL";
-    }
-    
-    if (queue_size <= 0) {
-        return "Queue size must be positive";
+    // Check if already initialized
+    if (g_context && g_context->initialized) {
+        return "common_plugin_init: already initialized";
     }
     
     // Allocate context
-    g_context = (plugin_context_t*)calloc(1, sizeof(plugin_context_t));
+    g_context = (plugin_context_t*)malloc(sizeof(plugin_context_t));
     if (!g_context) {
-        return "Failed to allocate plugin context";
+        return "common_plugin_init: allocation failed";
     }
     
-    // Initialize context
+    // Initialize context with memset for better safety
+    memset(g_context, 0, sizeof(*g_context));
     g_context->name = name;
     g_context->process_function = process_function;
-    g_context->initialized = 0;
-    g_context->finished = 0;
     
     // Allocate and initialize queue
-    g_context->queue = (consumer_producer_t*)calloc(1, sizeof(consumer_producer_t));
+    g_context->queue = (consumer_producer_t*)malloc(sizeof(consumer_producer_t));
     if (!g_context->queue) {
         free(g_context);
         g_context = NULL;
-        return "Failed to allocate queue";
+        return "common_plugin_init: queue allocation failed";
     }
     
     const char* error = consumer_producer_init(g_context->queue, queue_size);
@@ -158,10 +151,13 @@ const char* common_plugin_init(const char* (*process_function)(const char*), con
         free(g_context->queue);
         free(g_context);
         g_context = NULL;
-        return "Failed to create consumer thread";
+        return "common_plugin_init: thread create failed";
     }
     
     g_context->initialized = 1;
+    g_context->finished = 0;
+    g_context->joined = 0;
+    g_context->next_place_work = NULL;
     return NULL; // Success
 }
 
@@ -186,15 +182,18 @@ const char* plugin_init(int queue_size) {
 __attribute__((visibility("default")))
 const char* plugin_fini(void) {
     if (!g_context || !g_context->initialized) {
-        return "Plugin not initialized";
+        return NULL; // not initialized
     }
     
     // Signal that no more work will be added
-    consumer_producer_signal_finished(g_context->queue);
+    if (!g_context->finished && g_context->queue) {
+        consumer_producer_signal_finished(g_context->queue);
+    }
     
-    // Wait for consumer thread to finish
-    if (pthread_join(g_context->consumer_thread, NULL) != 0) {
-        return "Failed to join consumer thread";
+    // Wait for consumer thread to finish (prevent double join)
+    if (!g_context->joined) {
+        pthread_join(g_context->consumer_thread, NULL);
+        g_context->joined = 1;
     }
     
     // Clean up resources
@@ -213,18 +212,23 @@ const char* plugin_fini(void) {
  */
 __attribute__((visibility("default")))
 const char* plugin_place_work(const char* str) {
-    if (!g_context || !g_context->initialized) {
-        return "Plugin not initialized";
+    if (!g_context) {
+        return "plugin_place_work: not initialized";
     }
-    
+    if (!g_context->initialized) {
+        return "plugin_place_work: not initialized";
+    }
+    if (!g_context->queue) {
+        return "plugin_place_work: not initialized";
+    }
     if (!str) {
-        return "String is NULL";
+        return "plugin_place_work: bad argument";
     }
     
     // Duplicate the string since we take ownership
     char* str_copy = strdup(str);
     if (!str_copy) {
-        return "Failed to duplicate string";
+        return "plugin_place_work: string duplication failed";
     }
     
     const char* error = consumer_producer_put(g_context->queue, str_copy);
@@ -254,13 +258,20 @@ void plugin_attach(const char* (*next_place_work)(const char*)) {
  */
 __attribute__((visibility("default")))
 const char* plugin_wait_finished(void) {
-    if (!g_context || !g_context->initialized) {
-        return "Plugin not initialized";
+    if (!g_context || !g_context->initialized || !g_context->queue) {
+        return NULL; // not initialized
     }
     
     // Wait for the finished signal
-    if (consumer_producer_wait_finished(g_context->queue) != 0) {
-        return "Failed to wait for finished signal";
+    int rc = consumer_producer_wait_finished(g_context->queue);
+    if (rc != 0) {
+        return "plugin_wait_finished: queue wait failed";
+    }
+    
+    // Join thread if not already joined
+    if (!g_context->joined) {
+        pthread_join(g_context->consumer_thread, NULL);
+        g_context->joined = 1;
     }
     
     return NULL; // Success
