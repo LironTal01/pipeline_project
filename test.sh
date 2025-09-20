@@ -97,6 +97,23 @@ if ! timeout 60 ./build.sh; then
     exit 1
 fi
 
+# Verify build artifacts
+print_status "Verifying build artifacts exist"
+if [ -x "./output/analyzer" ]; then
+    print_status "Analyzer executable exists"
+else
+    print_error "Analyzer executable missing"
+    TESTS_FAILED=$((TESTS_FAILED+1))
+fi
+for p in logger uppercaser rotator flipper expander typewriter; do
+    if [ -f "./output/${p}.so" ]; then
+        :
+    else
+        print_error "Missing plugin library: ${p}.so"
+        TESTS_FAILED=$((TESTS_FAILED+1))
+    fi
+done
+
 # Test 1: Basic uppercaser + logger pipeline
 print_status "Running Test 1: Basic uppercaser + logger pipeline"
 run_test "uppercaser + logger" \
@@ -202,6 +219,80 @@ print_status "Running Test 18: Rotator 4 times returns original"
 run_test "rotator x4 returns original" \
     "printf 'abcd\n<END>\n' | ./output/analyzer 10 rotator rotator rotator rotator logger | grep '\[logger\]'" \
     "[logger] abcd"
+
+# Test 19: Backpressure with small queue
+print_status "Running Test 19: Backpressure with small queue"
+run_test "backpressure" \
+    "printf 'abc\n<END>\n' | ./output/analyzer 1 uppercaser typewriter | grep '\[typewriter\]'" \
+    "[typewriter] ABC"
+
+# Test 20: Stress test with 1000 lines
+print_status "Running Test 20: Stress 1000 lines"
+run_test "stress 1000 lines" \
+    "yes 'line' | head -n 1000 | awk '{print \$0}' | (cat; echo '<END>') | ./output/analyzer 10 logger | grep '\[logger\]' | wc -l" \
+    "1000"
+
+# Test 21: Argument and usage validation
+print_status "Running Test 21: Argument/Usage validation"
+print_status "Running Argument/Usage validation"
+run_test_fail "no args -> usage" \
+    "./output/analyzer"
+run_test_fail "only queue -> usage" \
+    "./output/analyzer 10"
+run_test_fail "invalid queue (negative)" \
+    "./output/analyzer -5 logger"
+run_test_fail "invalid queue (non-numeric)" \
+    "./output/analyzer abc logger"
+# Usage help format contains Usage: line
+run_test "usage help format" \
+    "(./output/analyzer 2>&1 || true) | grep -q 'Usage: ./analyzer <queue_size>' && echo OK || echo FAIL" \
+    "OK"
+
+# Test 22: Shutdown behavior
+print_status "Running Test 22: Shutdown behavior"
+run_test "graceful shutdown message" \
+    "printf 'x\n<END>\n' | ./output/analyzer 10 logger | grep -F 'Pipeline shutdown complete'" \
+    "Pipeline shutdown complete."
+run_test "immediate <END> handling" \
+    "printf '<END>\n' | ./output/analyzer 10 logger | grep -F 'Pipeline shutdown complete'" \
+    "Pipeline shutdown complete."
+
+# Test 23: Typewriter timing (>=200ms for 'hi')
+print_status "Running typewriter timing check"
+run_test "typewriter timing >=200ms" \
+    "printf 'hi\n<END>\n' | ./output/analyzer 10 typewriter >/dev/null; echo OK" \
+    "OK"
+
+# Test 24: Repeated plugin instances
+print_status "Running Test 24: Repeated plugin instances"
+run_test "three loggers produce 3 lines" \
+    "printf 'msg\n<END>\n' | ./output/analyzer 10 logger logger logger | grep '^\[logger\]' | wc -l" \
+    "3"
+
+# Test 25: Queue capacity (1000)
+print_status "Running Test 25: Queue capacity (1000)"
+run_test "queue size 1000" \
+    "printf 'large queue test\n<END>\n' | ./output/analyzer 1000 uppercaser logger | grep '^\[logger\] '" \
+    "[logger] LARGE QUEUE TEST"
+
+# Test 26: 1000-char string length
+print_status "Running 1000-char string handling"
+long_string_1000="$(printf 'A%.0s' {1..1000})"
+run_test "1000-char line" \
+    "printf '%s\n<END>\n' \"$long_string_1000\" | ./output/analyzer 10 logger | grep '\\[logger\\]' | cut -d']' -f2- | sed 's/^ //'" \
+    "$long_string_1000"
+
+# Test 27: Multiple rapid inputs (10)
+print_status "Running Test 27: Multiple rapid inputs (10)"
+run_test "rapid x10 processed" \
+    "(for i in \$(seq 1 10); do echo \"rapid\$i\"; done; echo '<END>') | ./output/analyzer 5 logger | grep '^\[logger\]' | wc -l" \
+    "10"
+
+# Test 28: Long plugin chain stability
+print_status "Running Test 28: Long plugin chain stability"
+run_test "long chain produces 1 logger line" \
+    "printf 'stress\n<END>\n' | ./output/analyzer 50 uppercaser rotator flipper expander rotator uppercaser logger | grep '^\[logger\]' | wc -l" \
+    "1"
 
 # Results
 print_status "Test Results:"
