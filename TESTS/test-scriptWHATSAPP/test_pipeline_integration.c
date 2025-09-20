@@ -7,28 +7,20 @@
 
 START_TEST(e2e_upper_logger)
         {
-                FILE *out = fopen("analyzer.log", "r");
-        if (!out) ck_abort_msg("missing analyzer.log");
+                FILE *fp = popen("cd ../../ && ./output/analyzer 8 uppercaser logger", "w");
+        ck_assert_ptr_nonnull(fp);
 
-        char  line[512];
-        int   found = 0;
-        while (fgets(line, sizeof line, out)) {
-            /* strip ANSI escapes so that raw “HELLO” can be spotted      */
-            char *p = line, clean[sizeof line]; size_t w = 0;
-            while (*p && w+1 < sizeof clean) {
-                if (*p == '\x1b') {          /* skip “\x1b[ … m” sequence */
-                    while (*p && *p != 'm') ++p;
-                    if (*p) ++p;              /* skip final 'm' */
-                } else {
-                    clean[w++] = *p++;
-                }
-            }
-            clean[w] = '\0';
-            if (strstr(clean, "HELLO")) { found = 1; break; }
-        }
-        fclose(out);
+        fputs("hello\n<END>\n", fp);
+        pclose(fp);                      /* closes stdin, analyzer drains */
 
-        ck_assert_msg(found, "expected transformed text in analyzer.log");
+        /* collect analyzer output */
+        FILE *out = popen("cd ../../ && echo 'hello\n<END>' | ./output/analyzer 8 uppercaser logger", "r");
+        if (!out) { ck_abort_msg("missing log output"); }
+
+        char buf[64]; fgets(buf, sizeof buf, out);
+        pclose(out);
+
+        ck_assert_msg(strstr(buf, "HELLO"), "expected transformed text");
         }
 END_TEST
 

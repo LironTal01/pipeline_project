@@ -21,9 +21,23 @@ const char* plugin_transform(const char* input) {
         return NULL;
     }
     
-    // Simply duplicate the input string
-    // The typewriter effect is simulated by the delay in processing
-    return strdup(input);
+    // Simulate typewriter effect with delays between characters
+    size_t len = strlen(input);
+    char* result = (char*)malloc(len + 1);
+    if (!result) {
+        return NULL;
+    }
+    
+    // Type each character with a small delay
+    for (size_t i = 0; i < len; i++) {
+        result[i] = input[i];
+        result[i + 1] = '\0';
+        
+        // Add delay between characters (100ms per character)
+        usleep(100000); // 100ms = 100000 microseconds
+    }
+    
+    return result;
 }
 
 /**

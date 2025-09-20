@@ -40,12 +40,22 @@ void* plugin_consumer_thread(void* arg) {
         if (context->process_function) {
             const char* result = context->process_function(item);
             
-            // Pass result to next plugin or print it
+            // Logger plugin always prints, others only print if they're last
+            if (strcmp(context->name, "logger") == 0 && result) {
+                printf("[%s] %s\n", context->name, result);
+            }
+            
+            // Pass result to next plugin or print it (if not logger)
             if (context->next_place_work && result) {
                 context->next_place_work(result);
-            } else if (result) {
-                // Last plugin in chain - print result without prefix
-                printf("%s\n", result);
+            } else if (result && strcmp(context->name, "logger") != 0) {
+                // Last plugin in chain - print result with prefix (non-logger plugins)
+                printf("[%s] %s\n", context->name, result);
+                free((void*)result);
+            }
+            
+            // Free the result if it was a logger (since it printed and doesn't pass on)
+            if (strcmp(context->name, "logger") == 0 && result) {
                 free((void*)result);
             }
             
@@ -56,8 +66,8 @@ void* plugin_consumer_thread(void* arg) {
             if (context->next_place_work) {
                 context->next_place_work(item);
             } else {
-                // Last plugin in chain - print without prefix
-                printf("%s\n", item);
+                // Last plugin in chain - print with prefix
+                printf("[%s] %s\n", context->name, item);
                 free(item);
             }
         }
@@ -113,9 +123,16 @@ const char* common_plugin_init(const char* (*process_function)(const char*), con
         return "common_plugin_init: bad arguments";
     }
     
-    // Check if already initialized
+    // Allow re-initialization by cleaning up existing context
     if (g_context && g_context->initialized) {
-        return "common_plugin_init: already initialized";
+        // Clean up existing context
+        if (g_context->queue) {
+            consumer_producer_destroy(g_context->queue);
+            free(g_context->queue);
+        }
+        free((void*)g_context->name);
+        free(g_context);
+        g_context = NULL;
     }
     
     // Allocate context
@@ -126,12 +143,18 @@ const char* common_plugin_init(const char* (*process_function)(const char*), con
     
     // Initialize context with memset for better safety
     memset(g_context, 0, sizeof(*g_context));
-    g_context->name = name;
+    g_context->name = strdup(name);
+    if (!g_context->name) {
+        free(g_context);
+        g_context = NULL;
+        return "common_plugin_init: name allocation failed";
+    }
     g_context->process_function = process_function;
     
     // Allocate and initialize queue
     g_context->queue = (consumer_producer_t*)malloc(sizeof(consumer_producer_t));
     if (!g_context->queue) {
+        free((void*)g_context->name);
         free(g_context);
         g_context = NULL;
         return "common_plugin_init: queue allocation failed";
@@ -140,6 +163,7 @@ const char* common_plugin_init(const char* (*process_function)(const char*), con
     const char* error = consumer_producer_init(g_context->queue, queue_size);
     if (error) {
         free(g_context->queue);
+        free((void*)g_context->name);
         free(g_context);
         g_context = NULL;
         return error;
@@ -149,6 +173,7 @@ const char* common_plugin_init(const char* (*process_function)(const char*), con
     if (pthread_create(&g_context->consumer_thread, NULL, plugin_consumer_thread, g_context) != 0) {
         consumer_producer_destroy(g_context->queue);
         free(g_context->queue);
+        free((void*)g_context->name);
         free(g_context);
         g_context = NULL;
         return "common_plugin_init: thread create failed";
@@ -199,6 +224,7 @@ const char* plugin_fini(void) {
     // Clean up resources
     consumer_producer_destroy(g_context->queue);
     free(g_context->queue);
+    free((void*)g_context->name);
     free(g_context);
     g_context = NULL;
     

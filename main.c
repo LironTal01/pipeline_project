@@ -4,6 +4,7 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include "plugins/plugin_sdk.h"
 
 // Function pointer types for plugin functions
@@ -24,11 +25,46 @@ typedef struct {
     plugin_wait_finished_func wait_finished;
     plugin_get_name_func get_name;
     char* name;
+    void* context; // Plugin context
+    int   is_temp_copy;  // Whether we loaded from a temporary copy
+    char* loaded_path;   // Path of the loaded library (so we can unlink the temp file)
 } plugin_t;
 
 // Global plugin array
 static plugin_t* plugins = NULL;
 static int plugin_count = 0;
+
+//Copy a file from src to dst. Returns 0 on success, -1 on error.
+static int copy_file(const char* src, const char* dst) {
+    int in = open(src, O_RDONLY);
+    if (in < 0) {
+        return -1;
+    }
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0700);
+    if (out < 0) {
+        close(in);
+        return -1;
+    }
+    char buf[64 * 1024];
+    ssize_t r;
+    while ((r = read(in, buf, sizeof buf)) > 0) {
+        ssize_t o = 0;
+        while (o < r) {
+            ssize_t w = write(out, buf + o, (size_t)(r - o));
+            if (w < 0) {
+                close(in);
+                close(out);
+                return -1;
+            }
+            o += w;
+        }
+    }
+    close(in);
+    if (close(out) != 0) {
+        return -1;
+    }
+    return (r < 0) ? -1 : 0;
+}
 
 /**
  * Load a plugin from shared library
@@ -38,45 +74,85 @@ static int plugin_count = 0;
 int load_plugin(const char* plugin_name) {
     char lib_path[256];
     snprintf(lib_path, sizeof(lib_path), "output/%s.so", plugin_name);
+
+    // Count how many times we've already loaded this plugin
+    int duplicate_index = 0;
+    for (int i = 0; i < plugin_count; i++) { 
+        // Check if the plugin name is the same as the plugin name we are trying to load
+        if (plugins[i].name && strcmp(plugins[i].name, plugin_name) == 0) { 
+            duplicate_index++;
+        }
+    }
+
+    char load_path[256]; // Path of the loaded library (so we can unlink the temp file)
+    int is_temp = 0;
+    if (duplicate_index == 0) {
+        // First instance: load directly from the original .so
+        snprintf(load_path, sizeof(load_path), "%s", lib_path); // Set the load path to the original path
+    } else {
+        // Subsequent instances: create a unique temporary copy
+        snprintf(load_path, sizeof(load_path), 
+                 "/tmp/analyzer_%ld_%d_%s.so",
+                 (long)getpid(), duplicate_index, plugin_name);
+        if (copy_file(lib_path, load_path) != 0) { // Copy the file to the temporary path
+            fprintf(stderr,
+                    "[ERROR][main] failed to duplicate '%s' -> '%s'\n",
+                    lib_path, load_path);
+            return -1;
+        }
+        is_temp = 1;
+    }
     
-    // Open the shared library
-    void* handle = dlopen(lib_path, RTLD_LAZY);
+    void* handle = dlopen(load_path, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
-        fprintf(stderr, "[ERROR][main] dlopen('%s') failed: %s\n", lib_path, dlerror());
+        fprintf(stderr,
+                "[ERROR][main] dlopen('%s') failed: %s\n",
+                load_path, dlerror());
+        if (is_temp) {
+            unlink(load_path);
+        }
         return -1;
     }
-    
-    // Resize plugin array
-    plugins = (plugin_t*)realloc(plugins, (plugin_count + 1) * sizeof(plugin_t));
-    if (!plugins) {
+
+    plugin_t* new_arr = realloc(plugins, (plugin_count + 1) * sizeof(plugin_t));
+    if (!new_arr) {
         dlclose(handle);
+        if (is_temp) {
+            unlink(load_path);
+        }
         return -1;
     }
-    
+    plugins = new_arr;
+
     plugin_t* plugin = &plugins[plugin_count];
     memset(plugin, 0, sizeof(plugin_t));
-    
-    // Get function pointers
-    plugin->handle = handle;
-    plugin->init = (plugin_init_func)dlsym(handle, "plugin_init");
-    plugin->fini = (plugin_fini_func)dlsym(handle, "plugin_fini");
-    plugin->place_work = (plugin_place_work_func)dlsym(handle, "plugin_place_work");
-    plugin->attach = (plugin_attach_func)dlsym(handle, "plugin_attach");
+    plugin->handle        = handle;
+    plugin->init          = (plugin_init_func)dlsym(handle, "plugin_init");
+    plugin->fini          = (plugin_fini_func)dlsym(handle, "plugin_fini");
+    plugin->place_work    = (plugin_place_work_func)dlsym(handle, "plugin_place_work");
+    plugin->attach        = (plugin_attach_func)dlsym(handle, "plugin_attach");
     plugin->wait_finished = (plugin_wait_finished_func)dlsym(handle, "plugin_wait_finished");
-    plugin->get_name = (plugin_get_name_func)dlsym(handle, "plugin_get_name");
-    
+    plugin->get_name      = (plugin_get_name_func)dlsym(handle, "plugin_get_name");
+    //plugin->is_temp_copy  = is_temp;
+    //plugin->loaded_path   = strdup(load_path);
+
     // Check if all required functions are found
     if (!plugin->init || !plugin->fini || !plugin->place_work || 
         !plugin->attach || !plugin->wait_finished || !plugin->get_name) {
-        fprintf(stderr, "[ERROR][main] dlsym() failed for plugin '%s': missing symbol\n", plugin_name);
-        dlclose(handle);
+            fprintf(stderr,
+                "[ERROR][main] dlsym() failed for plugin '%s': missing symbol\n",plugin_name); // Print the error message
+        dlclose(handle); // Close the shared library
+        if (is_temp) {  // If the plugin is a temporary copy, unlink the temporary file
+            unlink(load_path); // Unlink the temporary file
+        }
         return -1;
     }
     
-    plugin->name = strdup(plugin_name);
-    plugin_count++;
-    
-    return 0;
+    plugin->name = strdup(plugin_name); // Set the plugin name
+    plugin->is_temp_copy  = is_temp;    // Set the is_temp_copy flag
+    plugin->loaded_path   = is_temp ? strdup(load_path) : NULL; // Set the loaded_path
+    plugin_count++; // Increment the plugin count
+    return 0; // Return 0 on success
 }
 
 /**
@@ -93,16 +169,17 @@ int init_plugins(int queue_size) {
         }
     }
     
-    // Attach plugins in chain
+    // Attach each plugin to the next one in the chain
     for (int i = 0; i < plugin_count - 1; i++) {
         plugins[i].attach(plugins[i + 1].place_work);
     }
-    
-    return 0;
+
+    return 0; // Return 0 on success
 }
 
-/**
- * Finalize all loaded plugins
+
+/* Clean up all plugins. Calls plugin_fini on each, closes the handles,
+ * and unlinks any temporary .so files we created.
  */
 void fini_plugins(void) {
     for (int i = 0; i < plugin_count; i++) {
@@ -112,12 +189,17 @@ void fini_plugins(void) {
                 fprintf(stderr, "Error finalizing plugin %s: %s\n", plugins[i].name, error);
             }
         }
-        
+        // Close the shared library
         if (plugins[i].handle) {
             dlclose(plugins[i].handle);
         }
-        
-        if (plugins[i].name) {
+        // Unlink the temporary file if it is a temporary copy
+        if (plugins[i].is_temp_copy && plugins[i].loaded_path) { // If the plugin is a temporary copy and the loaded_path is not NULL
+            unlink(plugins[i].loaded_path);
+            free(plugins[i].loaded_path);
+        }    
+        // Free the plugin name
+        if (plugins[i].name) { // If the plugin name is not NULL
             free(plugins[i].name);
         }
     }
@@ -192,6 +274,7 @@ int main(int argc, char* argv[]) {
     int queue_size = atoi(argv[1]);
     if (queue_size <= 0) {
         fprintf(stderr, "Error: Queue size must be positive\n");
+        print_usage(argv[0]);
         return 1;
     }
     
